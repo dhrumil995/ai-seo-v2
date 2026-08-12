@@ -1,267 +1,127 @@
-import process from "process";
-import { useEffect } from "react";
-import { useFetcher, useLoaderData } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { boundary } from "@shopify/shopify-app-react-router/server";
-import { GoogleGenAI } from "@google/genai";
-import { authenticate, MONTHLY_PLAN } from "../shopify.server";
+import { Form, useLoaderData } from "react-router";
+import { login } from "../shopify.server";
 
 export const loader = async ({ request }) => {
-  const { admin, billing } = await authenticate.admin(request);
-
-  // Verify active billing subscription
-  await billing.require({
-    plans: [MONTHLY_PLAN],
-    onFailure: async () => billing.request({ plan: MONTHLY_PLAN }),
-  });
-
-  // Fetch up to 25 store products
-  const response = await admin.graphql(
-    `#graphql
-      query getProducts {
-        products(first: 25) {
-          edges {
-            node {
-              id
-              title
-              descriptionHtml
-            }
-          }
-        }
-      }`
-  );
-
-  const responseJson = await response.json();
-  const products = responseJson.data?.products?.edges || [];
-
-  return { products };
+  const url = new URL(request.url);
+  if (url.searchParams.get("shop")) {
+    throw await login(request);
+  }
+  return { showForm: Boolean(login) };
 };
 
-export const action = async ({ request }) => {
-  const { admin, billing } = await authenticate.admin(request);
-
-  await billing.require({
-    plans: [MONTHLY_PLAN],
-    onFailure: async () => billing.request({ plan: MONTHLY_PLAN }),
-  });
-
-  const formData = await request.formData();
-  const actionType = formData.get("actionType");
-
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
-  // ----------------------------------------------------
-  // BATCH / BULK OPTIMIZATION HANDLER
-  // ----------------------------------------------------
-  if (actionType === "bulk_optimize") {
-    const rawProducts = formData.get("productsData");
-    const productsToProcess = JSON.parse(rawProducts || "[]");
-
-    let successCount = 0;
-
-    for (const item of productsToProcess) {
-      try {
-        const aiResponse = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: `Optimize this e-commerce product for Search Engine Optimization (SEO).
-Original Title: ${item.title}
-Original Description: ${item.description || "No description"}
-
-Return response strictly as a valid JSON object without markdown fences:
-{
-  "title": "Optimized Short SEO Title (max 60 chars)",
-  "description": "Engaging meta description with strong buyer intent (max 150 chars)"
-}`,
-        });
-
-        const rawText = aiResponse.text.replace(/```json|```/g, "").trim();
-        const parsed = JSON.parse(rawText);
-
-        await admin.graphql(
-          `#graphql
-            mutation updateProduct($input: ProductInput!) {
-              productUpdate(input: $input) {
-                product {
-                  id
-                }
-              }
-            }`,
-          {
-            variables: {
-              input: {
-                id: item.id,
-                title: parsed.title,
-                descriptionHtml: `<p>${parsed.description}</p>`,
-              },
-            },
-          }
-        );
-
-        successCount++;
-      } catch (err) {
-        console.error(`Bulk optimization failed for ${item.id}:`, err);
-      }
-    }
-
-    return {
-      success: true,
-      bulk: true,
-      count: successCount,
-    };
-  }
-
-  // ----------------------------------------------------
-  // SINGLE PRODUCT OPTIMIZATION HANDLER
-  // ----------------------------------------------------
-  const productId = formData.get("productId");
-  const currentTitle = formData.get("currentTitle");
-  const currentDescription = formData.get("currentDescription");
-
-  const aiResponse = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: `Optimize this e-commerce product for Search Engine Optimization (SEO).
-Original Title: ${currentTitle}
-Original Description: ${currentDescription}
-
-Return response strictly as a valid JSON object without markdown fences:
-{
-  "title": "Optimized Short SEO Title (max 60 chars)",
-  "description": "Engaging meta description with strong buyer intent (max 150 chars)"
-}`,
-  });
-
-  let seoData = { title: currentTitle, description: currentDescription };
-  try {
-    const rawText = aiResponse.text.replace(/```json|```/g, "").trim();
-    seoData = JSON.parse(rawText);
-  } catch (e) {
-    console.error("AI Parsing Error:", e);
-  }
-
-  const updateResponse = await admin.graphql(
-    `#graphql
-      mutation updateProduct($input: ProductInput!) {
-        productUpdate(input: $input) {
-          product {
-            id
-            title
-            descriptionHtml
-          }
-        }
-      }`,
-    {
-      variables: {
-        input: {
-          id: productId,
-          title: seoData.title,
-          descriptionHtml: `<p>${seoData.description}</p>`,
-        },
-      },
-    }
-  );
-
-  const updateJson = await updateResponse.json();
-
-  return {
-    success: true,
-    bulk: false,
-    updatedProduct: updateJson.data?.productUpdate?.product,
-  };
-};
-
-export default function Index() {
-  const { products } = useLoaderData();
-  const fetcher = useFetcher();
-  const shopify = useAppBridge();
-
-  const isSubmitting = fetcher.state === "submitting";
-
-  useEffect(() => {
-    if (fetcher.data?.success) {
-      if (fetcher.data.bulk) {
-        shopify.toast.show(`Successfully optimized ${fetcher.data.count} products!`);
-      } else {
-        shopify.toast.show("SEO updated successfully!");
-      }
-    }
-  }, [fetcher.data, shopify]);
-
-  const bulkData = JSON.stringify(
-    products.map(({ node }) => ({
-      id: node.id,
-      title: node.title,
-      description: node.descriptionHtml?.replace(/<[^>]*>?/gm, "") || "",
-    }))
-  );
+export default function AppHome() {
+  const { showForm } = useLoaderData();
 
   return (
-    <s-page heading="AI SEO Writer & Batch Manager">
-      <s-section heading="Batch Catalog Optimization">
-        <s-paragraph>
-          Boost your store&apos;s rank on Google in seconds. Optimize single items or run a full batch sweep across your product catalog using Gemini AI.
-        </s-paragraph>
+    <div style={styles.container}>
+      <header style={styles.header}>
+        <h1 style={styles.title}>Boost Store Sales with AI SEO</h1>
+        <p style={styles.subtitle}>
+          Automatically generate high-converting, search-engine-optimized product titles and meta descriptions using Gemini AI in 1 click.
+        </p>
 
-        <s-stack direction="inline" gap="base">
-          <fetcher.Form method="POST">
-            <input type="hidden" name="actionType" value="bulk_optimize" />
-            <input type="hidden" name="productsData" value={bulkData} />
-            <s-button
-              type="submit"
-              variant="primary"
-              {...(isSubmitting && fetcher.formData?.get("actionType") === "bulk_optimize"
-                ? { loading: true }
-                : {})}
-            >
-              🚀 Batch Optimize All ({products.length} Products)
-            </s-button>
-          </fetcher.Form>
-        </s-stack>
-      </s-section>
+        {showForm && (
+          <Form method="post" action="/auth/login" style={styles.form}>
+            <label style={styles.label}>
+              <span>Enter your store domain to get started</span>
+              <input
+                type="text"
+                name="shop"
+                placeholder="my-shop-domain.myshopify.com"
+                style={styles.input}
+                required
+              />
+            </label>
+            <button type="submit" style={styles.button}>
+              Install App
+            </button>
+          </Form>
+        )}
+      </header>
 
-      <s-section heading="Individual Product Catalog">
-        <s-stack direction="block" gap="large">
-          {products.map(({ node: product }) => (
-            <s-box
-              key={product.id}
-              padding="base"
-              borderWidth="base"
-              borderRadius="base"
-              background="subdued"
-            >
-              <s-stack direction="inline" gap="base" align="space-between">
-                <div>
-                  <s-heading>{product.title}</s-heading>
-                  <s-paragraph>
-                    {product.descriptionHtml?.replace(/<[^>]*>?/gm, "").substring(0, 100) || "No description provided."}...
-                  </s-paragraph>
-                </div>
-
-                <fetcher.Form method="POST">
-                  <input type="hidden" name="actionType" value="single" />
-                  <input type="hidden" name="productId" value={product.id} />
-                  <input type="hidden" name="currentTitle" value={product.title} />
-                  <input
-                    type="hidden"
-                    name="currentDescription"
-                    value={product.descriptionHtml || ""}
-                  />
-                  <s-button
-                    type="submit"
-                    variant="secondary"
-                    {...(isSubmitting && fetcher.formData?.get("productId") === product.id
-                      ? { loading: true }
-                      : {})}
-                  >
-                    Optimize
-                  </s-button>
-                </fetcher.Form>
-              </s-stack>
-            </s-box>
-          ))}
-        </s-stack>
-      </s-section>
-    </s-page>
+      <section style={styles.features}>
+        <div style={styles.featureCard}>
+          <h3>⚡ 1-Click AI SEO</h3>
+          <p>Instantly generate keyword-rich product descriptions and Google-friendly titles in seconds.</p>
+        </div>
+        <div style={styles.featureCard}>
+          <h3>🚀 Batch Catalog Optimization</h3>
+          <p>Optimize up to 25 catalog items simultaneously without tedious manual work.</p>
+        </div>
+        <div style={styles.featureCard}>
+          <h3>📈 Organic Traffic Growth</h3>
+          <p>Improve your search engine rankings on Google and drive consistent organic buyer traffic.</p>
+        </div>
+      </section>
+    </div>
   );
 }
 
-export const headers = (headersArgs) => boundary.headers(headersArgs);
+const styles = {
+  container: {
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'San Francisco', Roboto, 'Segoe UI', 'Helvetica Neue', sans-serif",
+    maxWidth: "900px",
+    margin: "0 auto",
+    padding: "60px 20px",
+    textAlign: "center",
+    color: "#202223",
+  },
+  header: {
+    marginBottom: "50px",
+  },
+  title: {
+    fontSize: "2.5rem",
+    fontWeight: "700",
+    marginBottom: "16px",
+  },
+  subtitle: {
+    fontSize: "1.2rem",
+    color: "#6d7175",
+    maxWidth: "600px",
+    margin: "0 auto 30px auto",
+    lineHeight: "1.5",
+  },
+  form: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "12px",
+  },
+  label: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px",
+    fontSize: "0.95rem",
+    color: "#4a4a4a",
+  },
+  input: {
+    padding: "12px 16px",
+    fontSize: "1rem",
+    borderRadius: "8px",
+    border: "1px solid #c9cccf",
+    width: "320px",
+    textAlign: "center",
+  },
+  button: {
+    padding: "12px 24px",
+    fontSize: "1rem",
+    fontWeight: "600",
+    color: "#ffffff",
+    backgroundColor: "#008060",
+    border: "none",
+    borderRadius: "8px",
+    cursor: "pointer",
+  },
+  features: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+    gap: "24px",
+    marginTop: "40px",
+  },
+  featureCard: {
+    padding: "24px",
+    borderRadius: "12px",
+    backgroundColor: "#f6f6f7",
+    textAlign: "left",
+  },
+};
