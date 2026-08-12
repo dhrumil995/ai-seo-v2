@@ -6,8 +6,7 @@ export const action = async ({ request }) => {
     console.log(`Received ${topic} webhook for ${shop}`);
     return new Response(null, { status: 200 });
   } catch (error) {
-    // Returns HTTP 401 on HMAC mismatch as required by Shopify
-    console.error("Webhook authentication failed:", error);
+    // Expected by Shopify when receiving invalid HMAC signatures
     return new Response("Unauthorized", { status: 401 });
   }
 };
