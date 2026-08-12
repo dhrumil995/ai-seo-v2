@@ -38,10 +38,13 @@ api_version = "2026-07"
 
   [[webhooks.subscriptions]]
   compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
-  uri = "/webhooks"
+  uri = "https://ai-seo-v2.onrender.com/webhooks"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [
+  "https://ai-seo-v2.onrender.com/auth/callback",
+  "https://ai-seo-v2.onrender.com/auth/shopify/callback"
+]
 
 [build]
 automatically_update_urls_on_dev = true
