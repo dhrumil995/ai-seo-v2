@@ -2,7 +2,7 @@
 
 client_id = "cc2a713bd8d0f613505dd00c89635c2c"
 name = "ai-seo-v2"
-application_url = "https://example.com"
+application_url = "https://ai-seo-v2.onrender.com"
 embedded = true
 
 [access_scopes]
